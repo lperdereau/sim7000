@@ -1,23 +1,32 @@
-use log::{info, debug, error};
-use std::{time::Duration, collections::VecDeque};
-use sim7000::{AtModem, SerialReadTimeout, Serial, SerialWrite};
-use sim7000::tcp_client::TcpClient;
+use log::{debug, error, info};
 use serialport::SerialPort;
+use sim7000::tcp_client::TcpClient;
+use sim7000::gnss_client::GnssClient;
+use sim7000::{AtModem, Serial, SerialReadTimeout, SerialWrite};
+use sim7000::commands::{At, AtCommand};
+use simplelog::*;
+use std::{collections::VecDeque, time::Duration};
 
+#[derive(Debug)]
 enum SerialOperation {
     Read(Vec<u8>),
     Write(Vec<u8>),
 }
 
-struct SIM7000Modem {
+pub struct SIM7000Modem {
     port: Box<dyn SerialPort>,
     operations: VecDeque<SerialOperation>,
 }
 
 impl SIM7000Modem {
-    pub fn new(baudrate: u32, port_path: &str) -> Self {
+    pub fn build(baudrate: u32, port_path: &str) -> SerialBuilder {
         let port = Self::connect(baudrate, port_path.to_string());
-        SIM7000Modem { port, operations: VecDeque::new() }
+        SerialBuilder {
+            serial: SIM7000Modem {
+                port,
+                operations: VecDeque::new(),
+            },
+        }
     }
 
     fn connect(baudrate: u32, port_path: String) -> Box<dyn SerialPort> {
@@ -34,6 +43,30 @@ impl SIM7000Modem {
                 panic!("SHIELD: Failed to connect to {}: {}", port_path, e);
             }
         }
+    }
+}
+
+pub struct SerialBuilder {
+    serial: SIM7000Modem,
+}
+
+impl SerialBuilder {
+    pub fn expect_read(mut self, bytes: &[u8]) -> SerialBuilder {
+        self.serial
+            .operations
+            .push_back(SerialOperation::Read(Vec::from(bytes)));
+        self
+    }
+
+    pub fn expect_write(mut self, bytes: &[u8]) -> SerialBuilder {
+        self.serial
+            .operations
+            .push_back(SerialOperation::Write(Vec::from(bytes)));
+        self
+    }
+
+    pub fn finalize(self) -> SIM7000Modem {
+        self.serial
     }
 }
 
@@ -74,11 +107,33 @@ impl SerialReadTimeout for SIM7000Modem {
         buf: &mut [u8],
         timeout_ms: u32,
     ) -> Result<Option<()>, Self::SerialError> {
-        todo!()
+        if timeout_ms <= 200u32 {
+            return Ok(None);
+        }
+        match self.operations.front_mut() {
+            Some(SerialOperation::Read(bytes)) => {
+                buf.copy_from_slice(&bytes[..buf.len()]);
+                *bytes = Vec::from(&bytes[buf.len()..]);
+
+                if bytes.len() == 0 {
+                    self.operations.pop_front();
+                }
+
+                Ok(Some(()))
+            }
+            Some(SerialOperation::Write(bytes)) => panic!(
+                "Expected Write of {:?}, read called instead",
+                bytes.as_slice()
+            ),
+            None => Ok(None),
+        }
     }
 
-    fn read(&mut self, buf: &mut [u8], timeout_ms: u32)
-        -> Result<Option<usize>, Self::SerialError> {
+    fn read(
+        &mut self,
+        buf: &mut [u8],
+        timeout_ms: u32,
+    ) -> Result<Option<usize>, Self::SerialError> {
         todo!()
     }
 }
@@ -89,7 +144,7 @@ impl AtModem for SIM7000Modem {
         command: C,
         timeout_ms: u32,
     ) -> Result<C::Output, sim7000::Error<Self::SerialError>> {
-        todo!()
+        command.read( self, timeout_ms)
     }
 
     fn write<'a, C: sim7000::commands::AtWrite<'a>>(
@@ -98,7 +153,7 @@ impl AtModem for SIM7000Modem {
         param: C::Input,
         timeout_ms: u32,
     ) -> Result<C::Output, sim7000::Error<Self::SerialError>> {
-        todo!()
+        command.write(param, self, timeout_ms)
     }
 
     fn execute<C: sim7000::commands::AtExecute>(
@@ -106,12 +161,28 @@ impl AtModem for SIM7000Modem {
         command: C,
         timeout_ms: u32,
     ) -> Result<C::Output, sim7000::Error<Self::SerialError>> {
-        todo!()
+        command.execute(self, timeout_ms)
     }
 }
 
 fn main() {
-    let mut modem = SIM7000Modem::new(115200, "/dev/ttyUSB0");
-    let mut tcp_client = TcpClient::default();
-    tcp_client.connect(&mut modem, "google.com", 80, None);
+    CombinedLogger::init(vec![TermLogger::new(
+        LevelFilter::Debug,
+        Config::default(),
+        TerminalMode::Mixed,
+        ColorChoice::Auto,
+    )])
+    .unwrap();
+
+    // let mut serial = SIM7000Modem::build(115200, "/dev/ttyAMA0")
+    //     .expect_write(b"AT\r\n")
+    //     .expect_read(b"OK\r\n")
+    //     .finalize();
+
+    let mut serial = SIM7000Modem::build(115200, "/dev/ttyAMA0")
+    .finalize();
+
+    let mut gnss_client = GnssClient::default();
+    gnss_client.gnss_start(&mut serial, Some(200u32));
+
 }

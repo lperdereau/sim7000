@@ -4,6 +4,7 @@ use commands::{AtExecute, AtRead, AtWrite};
 
 pub mod commands;
 pub mod tcp_client;
+pub mod gnss_client;
 
 #[cfg(test)]
 mod test;
