@@ -11,4 +11,5 @@ edition = "2021"
 [dependencies]
 heapless = "0.7"
 spin = {version = "0.9", default-features = false, features = ["once"] }
+serialport = "4.0.1"
 log = "0.4"
